@@ -31,7 +31,7 @@ public class ConcurrentArrayList<E> implements List<E> {
 
         synchronized (this) {
             if(size == maxSize){
-                maxSize *= 2;
+                maxSize <<= 1;
                 Object[] newArray = new Object[maxSize];
                 System.arraycopy(array, 0, newArray, 0, array.length);
                 newArray[size++] = o;
