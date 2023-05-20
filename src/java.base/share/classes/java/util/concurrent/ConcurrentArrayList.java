@@ -1,20 +1,19 @@
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.util.*;
 
 public class ConcurrentArrayList<E> implements List<E> {
     // these are marked volatile as they are shared between threads
-    // we avoid explicit locking by using copy on write
-    private static final Object[] def_empty = {};
+    // initially def_empty can hold 128 elements
+    private static final Object[] def_empty = new Object[1 << 7];
+
+    // we need to experiment with this value to find the optimal value
+    private final double GROWTH_FACTOR = 1.5;
 
     private volatile Object[] array;
     private volatile int size;
-    private volatile int maxSize = 50;
 
     ConcurrentArrayList() {
-        this.array = new Object[maxSize];
+        this.array = def_empty;
         size = 0;
     }
 
@@ -27,28 +26,33 @@ public class ConcurrentArrayList<E> implements List<E> {
         return list;
     }
 
+    private Object[] expand() {
+
+        int newCapacity = (int) (array.length * GROWTH_FACTOR);
+        Object[] newArray = new Object[newCapacity];
+        System.arraycopy(array, 0, newArray, 0, array.length);
+        return newArray;
+    }
+
     public boolean add(Object o) {
-
         synchronized (this) {
-            if(size == maxSize){
-                maxSize <<= 1;
-                Object[] newArray = new Object[maxSize];
-                System.arraycopy(array, 0, newArray, 0, array.length);
-                newArray[size++] = o;
+            int currentSize = size;
+            if (currentSize == array.length) {
+                Object[] newArray = expand();
+                newArray[currentSize] = o;
                 array = newArray;
-                return true;
+            } else {
+                array[currentSize] = o;
             }
-
-            array[size++] = o;
+            size = currentSize + 1;
         }
-
         return true;
     }
 
     @SuppressWarnings("unchecked")
     public E get(int index) {
         synchronized (this){
-            if(index >= size) throw new IndexOutOfBoundsException("Array size is " + size + " but index " + index + " was requested");
+            rangeCheck(index);
             return (E) array[index];
         }
     }
@@ -79,14 +83,7 @@ public class ConcurrentArrayList<E> implements List<E> {
         rangeCheck(index);
 
         synchronized (this) {
-            Object[] newArray = new Object[size + 1];
-
-            System.arraycopy(array, 0, newArray, 0, index);
-            newArray[index] = element;
-            System.arraycopy(array, index, newArray, index + 1, size - index);
-
-            array = newArray;
-            size++;
+            array[index] = element;
         }
 
     }
@@ -97,14 +94,12 @@ public class ConcurrentArrayList<E> implements List<E> {
         rangeCheck(index);
 
         synchronized (this) {
-            Object[] newArray = new Object[size - 1];
             Object removed = array[index];
 
-            System.arraycopy(array, 0, newArray, 0, index);
-            System.arraycopy(array, index + 1, newArray, index, size - index - 1);
+            if (size - 1 - index >= 0) System.arraycopy(array, index + 1, array, index, size - 1 - index);
 
-            array = newArray;
             size--;
+
             return (E) removed;
         }
     }
@@ -181,7 +176,7 @@ public class ConcurrentArrayList<E> implements List<E> {
 
     @Override
     public Iterator<E> iterator() {
-        // TODO: if you want implement Iterator
+        // TODO: in the future we can implement an iterator based on the parallel_iterator
         return new parallel_iterator();
     }
 
@@ -262,7 +257,7 @@ public class ConcurrentArrayList<E> implements List<E> {
 
     @Override
     public boolean removeAll(Collection<?> c) {
-        // this is poorly optimized
+        // TODO: we can look for a more efficient way to do this
 
         boolean changed = false;
 
@@ -278,19 +273,18 @@ public class ConcurrentArrayList<E> implements List<E> {
     }
 
     @Override
+    @SuppressWarnings("unchecked")
     public boolean containsAll(Collection c) {
+        HashSet<Object> set = new HashSet<Object>(c);
         boolean contains = true;
 
-        Object[] copy;
-        synchronized (this) {
-            copy = Arrays.copyOf(array, size);
+        int count = 0;
+
+        for (Object element : array) {
+            count += (set.contains(element)) ? 1 : 0;
         }
 
-        for (Object element : c) {
-            contains &= Arrays.asList(copy).contains(element);
-        }
-
-        return contains;
+        return count == c.size();
     }
 
     private void rangeCheck(int index) {
